@@ -1,0 +1,285 @@
+#######3# train.ipynb ########
+
+!pip3 uninstall --yes torch torchaudio torchvision torchtext torchdata
+!pip3 install torch torchaudio torchvision torchtext torchdata
+
+# Import needed modules
+import torch
+import torchvision
+import torchvision.transforms as transforms
+import os
+import matplotlib.pyplot as plt
+import numpy as np
+
+from google.colab import drive
+drive.mount('/content/gdrive')
+
+training_dataset_path = './gdrive/My Drive/COMPS492F/Project/material/Nike_Adidas_converse_Shoes_image_dataset/train'
+test_dataset_path = './gdrive/My Drive/COMPS492F/Project/material/Nike_Adidas_converse_Shoes_image_dataset/test'
+
+# training_dataset_path = 'material/Nike_Adidas_converse_Shoes_image_dataset/train'
+# test_dataset_path = 'material/Nike_Adidas_converse_Shoes_image_dataset/test'
+
+######### Calculate the mean and standard divetion of the dataset ##########
+
+training_transforms = transforms.Compose([transforms.Resize([240, 240]),
+                                          transforms.ToTensor()])
+
+# make training tramsform equal to the traning data path
+train_dataset = torchvision.datasets.ImageFolder(root = training_dataset_path, transform = training_transforms)
+
+# data loader
+train_loader = torch.utils.data.DataLoader(dataset = train_dataset,
+                                           batch_size = 32,
+                                           shuffle = False)
+
+# Get the mean and standard deviation of image dataset
+def get_mean_and_std(loader):
+  mean = 0. # mean value
+  std = 0. # standard divation value
+  total_images_count = 0
+  for images, _ in loader: # iterate through all of tha batches
+    image_count_in_a_batch = images.size(0)
+    images = images.view(image_count_in_a_batch, images.size(1), -1) # shape the image from badge
+    mean += images.mean(2).sum(0) # calculate the mean
+    std += images.std(2).sum(0) # calculate the standard divation
+    total_images_count += image_count_in_a_batch # add the total count in the back
+
+  mean /= total_images_count # get the average mean
+  std /= total_images_count # get the average std
+
+  return mean, std
+
+get_mean_and_std(train_loader)
+
+########## Image dataset preparation (Dataloaders and Transforms) ################
+
+train_dataset_path = './gdrive/My Drive/COMPS492F/Project/material/Nike_Adidas_converse_Shoes_image_dataset/train'
+test_dataset_path = './gdrive/My Drive/COMPS492F/Project/material/Nike_Adidas_converse_Shoes_image_dataset/test'
+
+# train_dataset_path = 'material/Nike_Adidas_converse_Shoes_image_dataset/train'
+# test_dataset_path = 'material/Nike_Adidas_converse_Shoes_image_dataset/test'
+
+mean = [0.7212, 0.7105, 0.7036]
+std = [0.2245, 0.2250, 0.2288]
+
+# transform the train and test dataset
+train_transforms = transforms.Compose([transforms.Resize([240, 240]), # reduce the average size 240 x 240
+                                       transforms.RandomHorizontalFlip(), # randomly flip the image horizontally
+                                       transforms.RandomRotation(10), # apply the random rotation to a 10 degrees
+                                       transforms.ToTensor(), # convert everything to be a tensor
+                                       transforms.Normalize(torch.Tensor(mean), torch.Tensor(std)) # normalization
+                                       ])
+                                       
+test_transforms = transforms.Compose([transforms.Resize([240, 240]),
+                                      transforms.ToTensor(), # convert everything to be a tensor
+                                      transforms.Normalize(torch.Tensor(mean), torch.Tensor(std)) # normalization
+                                      ])
+
+# Load the train and test dataset by specifying the path and apply the transform
+train_dataset = torchvision.datasets.ImageFolder(root = train_dataset_path, transform = train_transforms)
+test_dataset = torchvision.datasets.ImageFolder(root = test_dataset_path, transform = test_transforms)
+
+# show the random tranform images
+batch_size = 32
+def show_transformed_images(dataset):
+  loader = torch.utils.data.DataLoader(dataset, batch_size, shuffle = True)
+  batch = next(iter(loader))
+  images, labels = batch
+
+  grid = torchvision.utils.make_grid(images, nrow = 8)
+  plt.figure(figsize = (24,24))
+  plt.imshow(np.transpose(grid, (1, 2, 0)))
+  print('labels: ', labels)
+
+show_transformed_images(train_dataset)
+
+# test the data loaders pass to neural network
+train_loader = torch.utils.data.DataLoader(train_dataset, batch_size = 10, shuffle = True)
+test_loader = torch.utils.data.DataLoader(test_dataset, batch_size = 10, shuffle = True)
+
+# Set the device function
+def set_device():
+  if torch.cuda.is_available():
+      dev = 'cuda:0'
+  else:
+      dev = 'cpu'
+  return torch.device(dev)
+  
+def train_nn(model, train_loader, test_loader, criterion, optimizer, n_epochs):
+  device = set_device()
+  best_acc = 0
+
+  for epoch in range(n_epochs): # track all the information
+    print("Epoch number %d " % (epoch + 1))
+    model.train() # make sure the model switch
+    running_loss = 0.0
+    running_correct = 0.0
+    total = 0
+
+    for data in train_loader:
+      images, labels = data
+      images = images.to(device)
+      labels = labels.to(device)
+      total += labels.size(0) # calculate how many images are there in the batch
+
+      optimizer.zero_grad() # set the gradients to zero
+
+      outputs = model(images) # get all the output from mini badge
+
+      # prediction
+      _, predicted = torch.max(outputs.data, 1) # 1 dimension to preduce
+
+      loss = criterion(outputs, labels) # loss function
+      loss.backward() # back propagate to clculate the weight gradients
+      optimizer.step() # update the weight
+
+      running_loss += loss.item()
+      running_correct += (labels==predicted).sum().item()
+
+    epoch_loss = running_loss / len(train_loader)
+    epoch_acc = 100.00 * running_correct / total # accuracy
+
+    print("    - Training dataset. Got %d out of %d images correctly (%.3f%%). Epoch loss: %.3f"
+          % (running_correct, total, epoch_acc, epoch_loss))
+
+    test_dataset_acc = evaluate_model_on_test_set(model, test_loader)
+
+    if (test_dataset_acc > best_acc):
+      best_acc = test_dataset_acc
+      save_checkpoint(model, epoch, optimizer, best_acc)
+
+  print("Finished")
+  return model
+  
+# define the checkpoint function to save the checkpoint
+def save_checkpoint(model, epoch, optimizer, best_acc):
+  path = './gdrive/My Drive/COMPS492F/Project/model_best_checkpoint.path'
+  # path = 'model_best_checkpoint.path'
+  state = {
+      'epoch' : epoch + 1,
+      'model' : model.state_dict(), # save the model
+      'best accuracy' : best_acc,
+      'optimizer' : optimizer.state_dict(), # save the optimizer state
+      'comments' : 'Good model!'
+  }
+  torch.save(state, path)
+
+### Evaluate the model on the test dataset ###
+def evaluate_model_on_test_set(model, test_loader):
+  model.eval()
+  predicted_correctly_on_epoch = 0
+  total = 0
+  device = set_device()
+
+  # reduce the memory usage and spped up the computations:
+  with torch.no_grad():
+    for data in test_loader:
+      images, labels = data
+      images = images.to(device)
+      labels = labels.to(device)
+      total += labels.size(0)
+
+      outputs = model(images) # get all the output from mini badge
+
+      # prediction
+      _, predicted = torch.max(outputs.data, 1)
+
+      predicted_correctly_on_epoch += (predicted == labels).sum().item()
+
+    epoch_acc = 100.00 * predicted_correctly_on_epoch / total # accuracy
+    print("    - Testing dataset. Got %d out of %d images correctly (%.3f%%)"
+          % (predicted_correctly_on_epoch, total, epoch_acc))
+
+    return epoch_acc # return the dataset accuracy
+    
+import torchvision.models as models
+import torch.nn as nn
+import torch.optim as optim
+
+# Use the resnet18 model
+# specified parameter
+resnet18_model = models.resnet18(pretrained = False) # False --> start with the random weight # Ture --> give the model which has already been trained on imagenet
+num_firs = resnet18_model.fc.in_features # Size of each input sample
+number_of_classes = 3 # Number of classes
+resnet18_model.fc = nn.Linear(num_firs, number_of_classes) # Take the number of inputs and fertures as parameters and prepare the necessary matrices for forward propagation
+device = set_device()
+resnet_18_model = resnet18_model.to(device) # Set the device
+loss_fn = nn.CrossEntropyLoss() # loss function --> cross entropy
+
+# SGD optimizer: Stochastic Gradient Descent
+optimizer = optim.SGD(resnet18_model.parameters(),
+                      lr = 0.01, # learning rate
+                      momentum = 0.9, # optimization algorithms --> accelerate the gradients vectors in the right directions
+                      weight_decay = 0.003) # extra error to loss function, prevent the overfitting
+                      
+train_nn(resnet18_model, train_loader, test_loader, loss_fn, optimizer, 150)
+
+checkpoint = torch.load('./gdrive/My Drive/COMPS492F/Project/model_best_checkpoint.path')
+# checkpoint = torch.load('model_best_checkpoint.path')
+
+print(checkpoint['epoch'])
+print(checkpoint['comments'])
+print(checkpoint['best accuracy'])
+
+resnet18_model = models.resnet18()
+num_firs = resnet18_model.fc.in_features # Size of each input sample
+number_of_classes = 3 # Number of classes and feature
+resnet18_model.fc = nn.Linear(num_firs, number_of_classes)
+resnet18_model.load_state_dict(checkpoint['model']) # load the checkpoint model state
+
+torch.save(resnet18_model, './gdrive/My Drive/COMPS492F/Project/best_model.path') # save the model
+# torch.save(resnet18_model, 'best_model.path')
+
+############ test_model.ipynb ################
+import torch
+from torchvision import transforms
+from PIL import Image
+import argparse
+import os
+import numpy as np
+
+# connect to the google drive
+from google.colab import drive
+drive.mount('/content/gdrive')
+
+# parser = argparse.ArgumentParser()
+# parser.add_argument('--model_path', type=str, help='path to a pretrained model to use')
+# parser.add_argument('--test_data_path', type=str, help='Path to the test data.')
+# parser.add_argument('--result_path', type=str, help='Path to save the results')
+
+# args = parser.parse_args(args=[])
+
+# Load model
+model = torch.load('./gdrive/MyDrive/COMPS492F/Project/best_model.path')
+# model = torch.load('best_model.path')
+model.eval() # evolation model
+
+# Image preprocessing
+mean = [0.7212, 0.7105, 0.7036]
+std = [0.2245, 0.2250, 0.2288]
+
+transform = transforms.Compose([
+    transforms.Resize([240, 240]), # same size as training
+    transforms.ToTensor(), # convert everything to tensor
+    transforms.Normalize(torch.Tensor(mean), torch.Tensor(std)) # same mean and std to normalization
+])
+
+# Load images and predict
+test_data_path = '/content/gdrive/MyDrive/COMPS492F/Project/test_images'
+# test_data_path = 'test_images'
+results = []
+for filename in os.listdir(test_data_path):
+    image = Image.open(os.path.join(test_data_path, filename)) # open the image floder
+    image = transform(image).float() # transform the image (convert it to float)
+    image = image.unsqueeze(0)# change the image shape
+
+    output = model(image)
+    _, predicted = torch.max(output, 1) # predict convert it to a normal integer
+    
+    results.append(predicted.item())
+    
+# Save results to txt
+result_path = '/content/gdrive/MyDrive/COMPS492F/Project/results.txt'
+# result_path = 'results.txt'
+np.savetxt(result_path, results, fmt='%d')
